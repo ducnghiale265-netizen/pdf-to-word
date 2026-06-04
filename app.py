@@ -348,8 +348,4 @@ if uploaded_file is not None:
 
             # ── XỬ LÝ NHÁNH 2: CHUYỂN SANG POWERPOINT ──────────────────
             elif conversion_type == "Chuyển sang PowerPoint (.pptx)":
-                pptx_name = os.path.splitext(uploaded_file.name)[0] + ".pptx"
-                
-                with st.spinner("⏳ Đang bóc tách chữ, dựng cấu trúc bảng sang PowerPoint..."):
-                    try:
-                        pptx_bytes = convert_pdf_
+                pptx_name = os.path.splitext
