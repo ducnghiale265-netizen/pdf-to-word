@@ -36,10 +36,27 @@ def add_complex_field(run, instruction):
     r.append(fldChar_end)
 
 
+def remove_trailing_empty_paragraphs(doc_path):
+    """Xóa dòng trống cuối file — lấy nguyên từ notebook."""
+    doc = Document(doc_path)
+    modified = False
+
+    for p in reversed(doc.paragraphs):
+        if not p.text.strip():
+            p._element.getparent().remove(p._element)
+            modified = True
+        else:
+            break
+
+    if modified:
+        doc.save(doc_path)
+
+
 def fix_and_style_footer(doc_path):
+    """Xóa 'Trang X/Y' trong body + đưa vào footer thật — lấy nguyên từ notebook."""
     doc = Document(doc_path)
 
-    # Xóa dòng "Trang X/Y" trong body trước
+    # Xóa dòng "Trang X/Y" trong body
     page_pattern = re.compile(r'^Trang\s+\d+(/\d+)?$', re.IGNORECASE)
     to_remove = [p for p in doc.paragraphs if page_pattern.match(p.text.strip())]
     for para in to_remove:
@@ -50,28 +67,24 @@ def fix_and_style_footer(doc_path):
         section.footer.is_linked_to_previous = False
         footer = section.footer
 
-        # Xóa footer cũ
         for para in footer.paragraphs:
             para._element.getparent().remove(para._element)
 
-        # Footer mới
         para = footer.add_paragraph()
         para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
 
-        run1 = para.add_run("Trang ")
-        run_page = para.add_run()
+        run1      = para.add_run("Trang ")
+        run_page  = para.add_run()
         add_complex_field(run_page, " PAGE ")
-        run2 = para.add_run("/")
+        run2      = para.add_run("/")
         run_total = para.add_run()
         add_complex_field(run_total, " NUMPAGES ")
 
-        # Format font
         for run in para.runs:
             run.font.name = "Times New Roman"
             run.font.size = Pt(11)
-            run.italic = True
-
-            rPr = run._r.get_or_add_rPr()
+            run.italic    = True
+            rPr    = run._r.get_or_add_rPr()
             rFonts = rPr.find(qn("w:rFonts"))
             if rFonts is None:
                 rFonts = OxmlElement("w:rFonts")
@@ -132,7 +145,6 @@ if uploaded_file is not None:
                 st.error(f"❌ Không đọc được file PDF: {e}")
                 st.stop()
 
-            # Chuyển đổi
             with st.spinner("⏳ Đang chuyển đổi, vui lòng chờ..."):
                 try:
                     start_0 = (start_page - 1) if start_page > 0 else 0
@@ -142,10 +154,13 @@ if uploaded_file is not None:
                     cv.convert(docx_path, start=start_0, end=end_0)
                     cv.close()
 
-                    # Fix footer (xóa "Trang X/Y" trong body + đưa vào footer thật)
+                    # Bước 1: Xóa dòng trống cuối file
+                    remove_trailing_empty_paragraphs(docx_path)
+
+                    # Bước 2: Fix footer
                     moved = fix_and_style_footer(docx_path)
                     if moved > 0:
-                        st.info(f"🔧 Đã tự động chuyển {moved} dòng số trang vào footer.")
+                        st.info(f"🔧 Đã chuyển {moved} dòng số trang vào footer.")
 
                     with open(docx_path, "rb") as f:
                         docx_bytes = f.read()
