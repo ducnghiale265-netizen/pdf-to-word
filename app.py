@@ -135,7 +135,7 @@ def post_process_word(docx_path, has_marker):
 
     doc.save(docx_path)
 
-# ── HÀM CHUYỂN PDF SANG PPTX NÂNG CAO (THUẬT TOÁN CHỐNG ĐÈ CHỮ) ──
+# ── HÀM CHUYỂN PDF SANG PPTX SIÊU CẤP CHỐNG ĐÈ CHỮ (FLOW LAYOUT) ──
 def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
     prs = Presentation()
     blank_layout = prs.slide_layouts[6] 
@@ -158,38 +158,7 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
         
         slide = prs.slides.add_slide(blank_layout)
         
-        # 1. TRÍCH XUẤT VÀ DỰNG BẢNG NATIVE
-        tables = pdf_page.find_tables()
-        table_bboxes = []
-        
-        for t in tables:
-            data = t.extract() 
-            if not data:
-                continue
-            rows = len(data)
-            cols = len(data[0]) if rows > 0 else 0
-            if rows == 0 or cols == 0:
-                continue
-            
-            table_bboxes.append(t.bbox)
-            
-            left = Inches(t.bbox[0] / 72)
-            top = Inches(t.bbox[1] / 72)
-            width = Inches((t.bbox[2] - t.bbox[0]) / 72)
-            height = Inches((t.bbox[3] - t.bbox[1]) / 72)
-            
-            table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
-            pptx_table = table_shape.table
-            
-            for r_idx, row_data in enumerate(data):
-                for c_idx, cell_value in enumerate(row_data):
-                    cell = pptx_table.cell(r_idx, c_idx)
-                    cell.text = str(cell_value) if cell_value is not None else ""
-                    for p in cell.text_frame.paragraphs:
-                        p.font.name = "Times New Roman"
-                        p.font.size = PptxPt(10)
-                        
-        # 2. TRÍCH XUẤT HÌNH ẢNH / LOGO
+        # 1. TRÍCH XUẤT HÌNH ẢNH / LOGO NỀN (Vẽ độc lập tuyệt đối)
         image_infos = pdf_page.get_image_info(hashes=False, xrefs=True)
         for img_info in image_infos:
             xref = img_info['xref']
@@ -207,11 +176,26 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
                     )
                 except Exception:
                     pass
-                    
-        # 3. LỌC BỎ CHỮ TRONG BẢNG & SẮP XẾP KHỐI CHỮ NGOÀI BẢNG
-        page_dict = pdf_page.get_text("dict")
-        text_blocks = []
+
+        # 2. GOM TẤT CẢ PHẦN TỬ NỘI DUNG (BẢNG + CHỮ) ĐỂ XẾP HÀNG THEO DÒNG CHẢY
+        tables = pdf_page.find_tables()
+        all_elements = []
+        table_bboxes = []
         
+        # Lấy danh sách các bảng biểu
+        for t in tables:
+            data = t.extract() 
+            if not data or len(data) == 0 or len(data[0]) == 0:
+                continue
+            table_bboxes.append(t.bbox)
+            all_elements.append({
+                "type": "table",
+                "bbox": t.bbox,
+                "data": data
+            })
+            
+        # Lấy danh sách các khối chữ nằm ngoài bảng
+        page_dict = pdf_page.get_text("dict")
         for block in page_dict.get("blocks", []):
             if "lines" in block:
                 bbox = block["bbox"]
@@ -225,76 +209,115 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
                         break
                 
                 if not inside_table:
-                    text_blocks.append(block)
+                    # Kiểm tra chuỗi text thực tế xem có rỗng không
+                    text_content = "".join([span.get("text", "") for line in block["lines"] for span in line.get("spans", "")]).strip()
+                    if text_content:
+                        all_elements.append({
+                            "type": "text_block",
+                            "bbox": bbox,
+                            "block_data": block
+                        })
+                        
+        # SẮP XẾP TẤT CẢ PHẦN TỬ THEO THỨ TỰ TỪ TRÊN XUỐNG DƯỚI (QUAN TRỌNG)
+        all_elements.sort(key=lambda e: e["bbox"][1])
         
-        # Sắp xếp các khối văn bản từ trên xuống dưới
-        text_blocks.sort(key=lambda b: b["bbox"][1])
+        # 3. DỰNG CÁC PHẦN TỬ THEO CƠ CHẾ CUỐN CHIẾU CHỐNG ĐÈ CHỮ
+        last_bottom_y = 20  # Lề trên mặc định ban đầu
         
-        # Nhóm các khối văn bản liên tiếp lại với nhau để đưa chung vào 1 TextBox
-        grouped_boxes = []
-        current_group = []
-        
-        for b in text_blocks:
-            if not current_group:
-                current_group.append(b)
+        for elem in all_elements:
+            orig_x0, orig_y0, orig_x1, orig_y1 = elem["bbox"]
+            
+            # Tính toán vị trí top mới: Không bao giờ được đè lên phần tử phía trên nó
+            if last_bottom_y == 20:
+                render_y0 = orig_y0
             else:
-                prev_b = current_group[-1]
-                prev_bottom = prev_b["bbox"][3]
-                curr_top = b["bbox"][1]
+                # Đảm bảo cách phần tử ngay trên nó ít nhất 12 điểm (points)
+                render_y0 = max(orig_y0, last_bottom_y + 12)
+            
+            # --- Trường hợp dựng Khối chữ ---
+            if elem["type"] == "text_block":
+                block = elem["block_data"]
+                num_lines = len(block["lines"])
                 
-                # Kiểm tra xem có bảng biểu nào nằm chen giữa 2 khối chữ này không
-                has_table_between = False
-                for t_box in table_bboxes:
-                    if prev_bottom <= t_box[1] and t_box[3] <= curr_top:
-                        has_table_between = True
-                        break
+                # Tìm cỡ chữ lớn nhất trong khối để tính toán độ co dãn chiều cao
+                max_size = 11
+                for line in block["lines"]:
+                    for span in line.get("spans", []):
+                        max_size = max(max_size, span.get("size", 11))
+                        
+                # Ước lượng chiều cao thực tế hộp chữ sau khi render paragraph
+                estimated_height = (num_lines * max_size * 1.3) + 10
                 
-                # Nếu khoảng cách gần (< 45 pt) và không bị bảng ngăn cách -> Gộp nhóm
-                if (curr_top - prev_bottom < 45) and not has_table_between:
-                    current_group.append(b)
-                else:
-                    grouped_boxes.append(current_group)
-                    current_group = [b]
-        if current_group:
-            grouped_boxes.append(current_group)
-            
-        # Dựng các nhóm văn bản lên Slide PowerPoint
-        for group in grouped_boxes:
-            g_x0 = min(b["bbox"][0] for b in group)
-            g_y0 = min(b["bbox"][1] for b in group)
-            g_x1 = max(b["bbox"][2] for b in group)
-            g_y1 = max(b["bbox"][3] for b in group)
-            
-            # Thêm buffer 35 điểm chiều ngang để hộp chữ rộng rãi, chống rớt dòng lỗi
-            margin_buffer = 35 
-            b_left = Inches(g_x0 / 72)
-            b_top = Inches(g_y0 / 72)
-            b_width = Inches((g_x1 - g_x0 + margin_buffer) / 72)
-            b_height = Inches((g_y1 - g_y0) / 72)
-            
-            txBox = slide.shapes.add_textbox(b_left, b_top, b_width, b_height)
-            tf = txBox.text_frame
-            tf.word_wrap = True
-            tf.margin_left = tf.margin_top = tf.margin_right = tf.margin_bottom = 0
-            
-            is_first_para = True
-            for b in group:
-                for line in b["lines"]:
+                b_left = Inches(orig_x0 / 72)
+                b_top = Inches(render_y0 / 72)
+                b_width = Inches((orig_x1 - orig_x0 + 45) / 72)  # Cộng 45pt tránh rớt dòng lỗi bề ngang
+                b_height = Inches(estimated_height / 72)
+                
+                txBox = slide.shapes.add_textbox(b_left, b_top, b_width, b_height)
+                tf = txBox.text_frame
+                tf.word_wrap = True
+                tf.margin_left = tf.margin_top = tf.margin_right = tf.margin_bottom = 0
+                
+                is_first_para = True
+                for line in block["lines"]:
                     if not is_first_para:
                         p = tf.add_paragraph()
                     else:
                         p = tf.paragraphs[0]
                         is_first_para = False
                         
+                    # Triệt tiêu margin thừa của Office gây nở chữ đè hàng
+                    p.space_before = PptxPt(0)
+                    p.space_after = PptxPt(2)
+                    p.line_spacing = 1.05
+                    
                     for span in line.get("spans", []):
                         run = p.add_run()
                         run.text = span.get("text", "")
-                        # Thu nhỏ font nhẹ 5% để chữ nằm gọn gàng lý tưởng trong khung vẽ
-                        run.font.size = PptxPt(max(span.get("size", 11) * 0.95, 8))
+                        run.font.size = PptxPt(max(span.get("size", 11) * 0.95, 8)) # Hạ font defensive 5%
                         run.font.name = "Times New Roman"
-                        # Tự động giữ định dạng chữ ĐẬM nếu bản gốc có
                         if "bold" in span.get("font", "").lower():
                             run.font.bold = True
+                            
+                # Lưu lại vị trí đáy thực tế của khối chữ này
+                last_bottom_y = render_y0 + estimated_height
+                
+            # --- Trường hợp dựng Bảng biểu ---
+            elif elem["type"] == "table":
+                data = elem["data"]
+                rows = len(data)
+                cols = len(data[0])
+                
+                left = Inches(orig_x0 / 72)
+                top = Inches(render_y0 / 72)
+                width = Inches((orig_x1 - orig_x0) / 72)
+                
+                estimated_table_height = max(orig_y1 - orig_y0, rows * 24)
+                height = Inches(estimated_table_height / 72)
+                
+                table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
+                pptx_table = table_shape.table
+                
+                for r_idx, row_data in enumerate(data):
+                    for c_idx, cell_value in enumerate(row_data):
+                        cell = pptx_table.cell(r_idx, c_idx)
+                        cell.text = str(cell_value) if cell_value is not None else ""
+                        
+                        # Khóa chặt biên ô bảng không cho tràn chữ tự do
+                        cell.margin_left = Inches(0.04)
+                        cell.margin_right = Inches(0.04)
+                        cell.margin_top = Inches(0.04)
+                        cell.margin_bottom = Inches(0.04)
+                        
+                        for p in cell.text_frame.paragraphs:
+                            p.font.name = "Times New Roman"
+                            p.font.size = PptxPt(9.5)
+                            p.space_before = PptxPt(0)
+                            p.space_after = PptxPt(0)
+                            p.line_spacing = 1.0
+                            
+                # Lưu lại vị trí đáy thực tế của bảng biểu này
+                last_bottom_y = render_y0 + estimated_table_height
                         
     doc.close()
     pptx_io = io.BytesIO()
@@ -387,7 +410,7 @@ if uploaded_file is not None:
             elif conversion_type == "Chuyển sang PowerPoint (.pptx)":
                 pptx_name = os.path.splitext(uploaded_file.name)[0] + ".pptx"
                 
-                with st.spinner("⏳ Đang tối ưu khối chữ và dựng slide chống đè chữ..."):
+                with st.spinner("⏳ Đang tối ưu hóa dòng chảy layout, vui lòng đợi..."):
                     try:
                         pptx_bytes = convert_pdf_to_pptx(
                             pdf_path=pdf_path,
