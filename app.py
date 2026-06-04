@@ -135,10 +135,10 @@ def post_process_word(docx_path, has_marker):
 
     doc.save(docx_path)
 
-# ── HÀM CHUYỂN PDF SANG PPTX NÂNG CAO: GIỮ BẢNG + TEXT SỬA ĐƯỢC ──
+# ── HÀM CHUYỂN PDF SANG PPTX NÂNG CAO (ĐÃ TỐI ƯU KHỐI CHỮ - SIÊU NHANH) ──
 def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
     prs = Presentation()
-    blank_layout = prs.slide_layouts[6] # Slide trống hoàn toàn
+    blank_layout = prs.slide_layouts[6] 
     
     doc = fitz.open(pdf_path)
     if password:
@@ -153,18 +153,17 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
         page_width = pdf_page.rect.width
         page_height = pdf_page.rect.height
         
-        # Thiết lập kích thước Slide khít với PDF gốc
         prs.slide_width = Inches(page_width / 72)
         prs.slide_height = Inches(page_height / 72)
         
         slide = prs.slides.add_slide(blank_layout)
         
-        # 1. PHÁT HIỆN VÀ DỰNG BẢNG (TABLES) NATIVE TRÊN POWERPOINT
+        # 1. PHÁT HIỆN VÀ DỰNG BẢNG NATIVE
         tables = pdf_page.find_tables()
         table_bboxes = []
         
         for t in tables:
-            data = t.extract() # Lấy mảng dữ liệu 2 chiều (rows x cols)
+            data = t.extract() 
             if not data:
                 continue
             rows = len(data)
@@ -172,25 +171,20 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
             if rows == 0 or cols == 0:
                 continue
             
-            # Lưu lại tọa độ của bảng để lát nữa không trích xuất text đè lên vùng này
             table_bboxes.append(t.bbox)
             
-            # Quy đổi tọa độ bảng sang PowerPoint
             left = Inches(t.bbox[0] / 72)
             top = Inches(t.bbox[1] / 72)
             width = Inches((t.bbox[2] - t.bbox[0]) / 72)
             height = Inches((t.bbox[3] - t.bbox[1]) / 72)
             
-            # Khởi tạo bảng PowerPoint nguyên bản
             table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
             pptx_table = table_shape.table
             
-            # Đổ dữ liệu chữ vào từng Cell trong bảng
             for r_idx, row_data in enumerate(data):
                 for c_idx, cell_value in enumerate(row_data):
                     cell = pptx_table.cell(r_idx, c_idx)
                     cell.text = str(cell_value) if cell_value is not None else ""
-                    # Định dạng font chữ trong bảng
                     for p in cell.text_frame.paragraphs:
                         p.font.name = "Times New Roman"
                         p.font.size = PptxPt(10)
@@ -214,13 +208,12 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
                 except Exception:
                     pass
                     
-        # 3. TRÍCH XUẤT VĂN BẢN (TỰ ĐỘNG BỎ QUA CÁC TEXT NẰM TRONG BẢNG)
+        # 3. TRÍCH XUẤT VĂN BẢN THEO KHỐI (BLOCK-BASED) - GIẢM TẢI VÀ TĂNG TỐC ĐỘ 
         page_dict = pdf_page.get_text("dict")
         for block in page_dict.get("blocks", []):
             if "lines" in block:
                 block_bbox = block["bbox"]
                 
-                # Tính toán điểm trung tâm của block text để kiểm tra xem nó có nằm lọt vào trong bảng không
                 cx = (block_bbox[0] + block_bbox[2]) / 2
                 cy = (block_bbox[1] + block_bbox[3]) / 2
                 
@@ -230,24 +223,26 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
                         inside_table = True
                         break
                 
-                # Nếu text thuộc về bảng, bỏ qua vì ta đã xử lý ở Bước 1
                 if inside_table:
                     continue
                 
-                for line in block["lines"]:
-                    bbox = line["bbox"]
-                    
-                    t_left = Inches(bbox[0] / 72)
-                    t_top = Inches(bbox[1] / 72)
-                    t_width = Inches(max((bbox[2] - bbox[0]), 20) / 72)
-                    t_height = Inches(max((bbox[3] - bbox[1]), 10) / 72)
-                    
-                    txBox = slide.shapes.add_textbox(t_left, t_top, t_width, t_height)
-                    tf = txBox.text_frame
-                    tf.word_wrap = True
-                    tf.margin_left = tf.margin_top = tf.margin_right = tf.margin_bottom = 0
-                    p = tf.paragraphs[0]
-                    
+                # Tạo 1 textbox duy nhất cho cả một khối chữ (Block) thay vì từng dòng đơn lẻ
+                b_left = Inches(block_bbox[0] / 72)
+                b_top = Inches(block_bbox[1] / 72)
+                b_width = Inches(max((block_bbox[2] - block_bbox[0]), 20) / 72)
+                b_height = Inches(max((block_bbox[3] - block_bbox[1]), 10) / 72)
+                
+                txBox = slide.shapes.add_textbox(b_left, b_top, b_width, b_height)
+                tf = txBox.text_frame
+                tf.word_wrap = True
+                tf.margin_left = tf.margin_top = tf.margin_right = tf.margin_bottom = 0
+                
+                for i, line in enumerate(block["lines"]):
+                    if i > 0:
+                        p = tf.add_paragraph()
+                    else:
+                        p = tf.paragraphs[0]
+                        
                     for span in line.get("spans", []):
                         run = p.add_run()
                         run.text = span.get("text", "")
@@ -269,7 +264,6 @@ st.set_page_config(
     layout="centered"
 )
 
-# ── Thanh Menu bên cạnh (Sidebar) để chọn chức năng ──────────────
 st.sidebar.title("⚙️ Bảng điều khiển")
 conversion_type = st.sidebar.radio(
     "Chọn định dạng đầu ra:",
@@ -279,7 +273,6 @@ conversion_type = st.sidebar.radio(
 st.title("🛠️ Bộ chuyển đổi PDF đa năng")
 st.write(f"Đang chọn chế độ: **{conversion_type}**")
 
-# ── Upload file ──────────────────────────────────────────────────
 uploaded_file = st.file_uploader("Chọn file PDF cần xử lý", type=["pdf"])
 password = st.text_input("Mật khẩu PDF (nếu có, để trống nếu không)", type="password")
 
@@ -290,7 +283,6 @@ with st.expander("📐 Tùy chọn nâng cao (Giới hạn số trang)"):
     with col2:
         end_page = st.number_input("Trang kết thúc (0 = đến cuối)", min_value=0, value=0)
 
-# ── Nút xử lý chính ──────────────────────────────────────────────
 if uploaded_file is not None:
     st.info(f"✅ Đã nhận file: **{uploaded_file.name}**")
 
@@ -301,7 +293,6 @@ if uploaded_file is not None:
             with open(pdf_path, "wb") as f:
                 f.write(uploaded_file.read())
 
-            # Kiểm tra tính hợp lệ và đếm số trang của PDF
             try:
                 doc = fitz.open(pdf_path)
                 if doc.is_encrypted:
@@ -315,7 +306,7 @@ if uploaded_file is not None:
                 st.error(f"❌ Không đọc được file PDF: {e}")
                 st.stop()
 
-            # ── XỬ LÝ NHÁNH 1: CHUYỂN SANG WORD ────────────────────────
+            # Chuyển sang Word
             if conversion_type == "Chuyển sang Word (.docx)":
                 docx_name = os.path.splitext(uploaded_file.name)[0] + ".docx"
                 docx_path = os.path.join(tmp_dir, docx_name)
@@ -346,6 +337,28 @@ if uploaded_file is not None:
                     except Exception as e:
                         st.error(f"❌ Lỗi khi chuyển đổi sang Word: {e}")
 
-            # ── XỬ LÝ NHÁNH 2: CHUYỂN SANG POWERPOINT ──────────────────
+            # Chuyển sang PowerPoint
             elif conversion_type == "Chuyển sang PowerPoint (.pptx)":
-                pptx_name = os.path.splitext
+                pptx_name = os.path.splitext(uploaded_file.name)[0] + ".pptx"
+                
+                with st.spinner("⏳ Đang bóc tách chữ và dựng cấu trúc bảng siêu tốc..."):
+                    try:
+                        pptx_bytes = convert_pdf_to_pptx(
+                            pdf_path=pdf_path,
+                            start_page=start_page,
+                            end_page=end_page,
+                            password=password if password else None
+                        )
+                        
+                        st.success("✅ Đã chuyển đổi sang PowerPoint thành công!")
+                        st.download_button(
+                            label="⬇️ Tải file PowerPoint về",
+                            data=pptx_bytes,
+                            file_name=pptx_name,
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            use_container_width=True
+                        )
+                    except Exception as e:
+                        st.error(f"❌ Lỗi khi chuyển đổi sang PowerPoint: {e}")
+else:
+    st.warning("👆 Hãy tải file PDF lên để hệ thống bắt đầu làm việc.")
