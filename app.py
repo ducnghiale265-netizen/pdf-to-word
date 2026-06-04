@@ -135,7 +135,7 @@ def post_process_word(docx_path, has_marker):
     doc.save(docx_path)
 
 # ── HÀM CHUYỂN PDF SANG PPTX GIỮ NGUYÊN LAYOUT ĐỊNH DẠNG ────────
-def convert_pdf_to_pptx_open_source(pdf_path):
+def convert_pdf_to_pptx(pdf_path):
     prs = Presentation()
     blank_layout = prs.slide_layouts[6] # Slide trống
     
