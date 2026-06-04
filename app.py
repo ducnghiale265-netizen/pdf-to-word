@@ -10,59 +10,64 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-# ── Lấy nguyên từ notebook Merge_Hợp_Đồng ───────────────────────
-def add_complex_field(run, instruction):
-    r = run._r
 
-    fldChar_begin = OxmlElement('w:fldChar')
-    fldChar_begin.set(qn('w:fldCharType'), 'begin')
-    r.append(fldChar_begin)
-
-    instrText = OxmlElement('w:instrText')
-    instrText.set(qn('xml:space'), 'preserve')
-    instrText.text = instruction
-    r.append(instrText)
-
-    fldChar_separate = OxmlElement('w:fldChar')
-    fldChar_separate.set(qn('w:fldCharType'), 'separate')
-    r.append(fldChar_separate)
-
-    text = OxmlElement('w:t')
-    text.text = "1"
-    r.append(text)
-
-    fldChar_end = OxmlElement('w:fldChar')
-    fldChar_end.set(qn('w:fldCharType'), 'end')
-    r.append(fldChar_end)
+# ── Hàm 1: Gộp nhiều section về 1 ──────────────────────────────
+def merge_sections_to_one(doc):
+    """
+    pdf2docx hay tạo nhiều section riêng biệt khiến NUMPAGES đếm sai.
+    Hàm này xóa tất cả inline sectPr trong body, chỉ giữ sectPr cuối cùng.
+    """
+    body = doc.element.body
+    removed = 0
+    for para in body.findall('.//' + qn('w:p')):
+        pPr = para.find(qn('w:pPr'))
+        if pPr is not None:
+            sectPr = pPr.find(qn('w:sectPr'))
+            if sectPr is not None:
+                pPr.remove(sectPr)
+                removed += 1
+    return removed
 
 
-def remove_trailing_empty_paragraphs(doc_path):
-    """Xóa dòng trống cuối file — lấy nguyên từ notebook."""
-    doc = Document(doc_path)
-    modified = False
-
+# ── Hàm 2: Xóa dòng trống cuối file ────────────────────────────
+def remove_trailing_empty_paragraphs(doc):
+    """Lấy từ notebook Merge_Hợp_Đồng — xóa dòng trống đẩy trang thừa."""
     for p in reversed(doc.paragraphs):
         if not p.text.strip():
             p._element.getparent().remove(p._element)
-            modified = True
         else:
             break
 
-    if modified:
-        doc.save(doc_path)
+
+# ── Hàm 3: Tạo field PAGE / NUMPAGES ───────────────────────────
+def add_complex_field(run, instruction):
+    """Lấy từ notebook Merge_Hợp_Đồng — field chuẩn có separate + display text."""
+    r = run._r
+    fc_begin = OxmlElement('w:fldChar')
+    fc_begin.set(qn('w:fldCharType'), 'begin')
+    r.append(fc_begin)
+
+    instr = OxmlElement('w:instrText')
+    instr.set(qn('xml:space'), 'preserve')
+    instr.text = instruction
+    r.append(instr)
+
+    fc_sep = OxmlElement('w:fldChar')
+    fc_sep.set(qn('w:fldCharType'), 'separate')
+    r.append(fc_sep)
+
+    wt = OxmlElement('w:t')
+    wt.text = '1'
+    r.append(wt)
+
+    fc_end = OxmlElement('w:fldChar')
+    fc_end.set(qn('w:fldCharType'), 'end')
+    r.append(fc_end)
 
 
-def fix_and_style_footer(doc_path):
-    """Xóa 'Trang X/Y' trong body + đưa vào footer thật — lấy nguyên từ notebook."""
-    doc = Document(doc_path)
-
-    # Xóa dòng "Trang X/Y" trong body
-    page_pattern = re.compile(r'^Trang\s+\d+(/\d+)?$', re.IGNORECASE)
-    to_remove = [p for p in doc.paragraphs if page_pattern.match(p.text.strip())]
-    for para in to_remove:
-        para._element.getparent().remove(para._element)
-
-    # Thiết lập lại footer cho tất cả sections
+# ── Hàm 4: Thiết lập footer ─────────────────────────────────────
+def set_footer(doc):
+    """Lấy từ notebook Merge_Hợp_Đồng — footer Times New Roman 11 italic."""
     for section in doc.sections:
         section.footer.is_linked_to_previous = False
         footer = section.footer
@@ -70,21 +75,21 @@ def fix_and_style_footer(doc_path):
         for para in footer.paragraphs:
             para._element.getparent().remove(para._element)
 
-        para = footer.add_paragraph()
-        para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        fp = footer.add_paragraph()
+        fp.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
 
-        run1      = para.add_run("Trang ")
-        run_page  = para.add_run()
+        fp.add_run("Trang ")
+        run_page = fp.add_run()
         add_complex_field(run_page, " PAGE ")
-        run2      = para.add_run("/")
-        run_total = para.add_run()
+        fp.add_run("/")
+        run_total = fp.add_run()
         add_complex_field(run_total, " NUMPAGES ")
 
-        for run in para.runs:
+        for run in fp.runs:
             run.font.name = "Times New Roman"
             run.font.size = Pt(11)
-            run.italic    = True
-            rPr    = run._r.get_or_add_rPr()
+            run.italic = True
+            rPr = run._r.get_or_add_rPr()
             rFonts = rPr.find(qn("w:rFonts"))
             if rFonts is None:
                 rFonts = OxmlElement("w:rFonts")
@@ -93,8 +98,36 @@ def fix_and_style_footer(doc_path):
             rFonts.set(qn("w:hAnsi"),    "Times New Roman")
             rFonts.set(qn("w:eastAsia"), "Times New Roman")
 
-    doc.save(doc_path)
-    return len(to_remove)
+
+# ── Pipeline xử lý sau convert ──────────────────────────────────
+def post_process(docx_path):
+    """
+    Thứ tự quan trọng:
+    1. Xóa 'Trang X/Y' trong body
+    2. Xóa dòng trống cuối
+    3. Gộp về 1 section (NUMPAGES mới đếm đúng toàn file)
+    4. Gắn footer thật sự
+    """
+    doc = Document(docx_path)
+
+    # 1. Xóa dòng "Trang X/Y" trong body
+    page_pattern = re.compile(r'^Trang\s+\d+(/\d+)?$', re.IGNORECASE)
+    to_remove = [p for p in doc.paragraphs if page_pattern.match(p.text.strip())]
+    count_marker = len(to_remove)
+    for para in to_remove:
+        para._element.getparent().remove(para._element)
+
+    # 2. Xóa dòng trống cuối
+    remove_trailing_empty_paragraphs(doc)
+
+    # 3. Gộp về 1 section
+    merge_sections_to_one(doc)
+
+    # 4. Gắn footer
+    set_footer(doc)
+
+    doc.save(docx_path)
+    return count_marker
 
 
 # ── Cấu hình trang ──────────────────────────────────────────────
@@ -140,7 +173,7 @@ if uploaded_file is not None:
                         st.stop()
                 total_pages = len(doc)
                 doc.close()
-                st.write(f"📑 Tổng số trang: **{total_pages}**")
+                st.write(f"📑 Tổng số trang PDF: **{total_pages}**")
             except Exception as e:
                 st.error(f"❌ Không đọc được file PDF: {e}")
                 st.stop()
@@ -154,13 +187,10 @@ if uploaded_file is not None:
                     cv.convert(docx_path, start=start_0, end=end_0)
                     cv.close()
 
-                    # Bước 1: Xóa dòng trống cuối file
-                    remove_trailing_empty_paragraphs(docx_path)
-
-                    # Bước 2: Fix footer
-                    moved = fix_and_style_footer(docx_path)
-                    if moved > 0:
-                        st.info(f"🔧 Đã chuyển {moved} dòng số trang vào footer.")
+                    # Post-processing
+                    count_marker = post_process(docx_path)
+                    if count_marker > 0:
+                        st.info(f"🔧 Đã chuyển {count_marker} dòng số trang vào footer.")
 
                     with open(docx_path, "rb") as f:
                         docx_bytes = f.read()
