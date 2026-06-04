@@ -136,30 +136,43 @@ def post_process_word(docx_path, has_marker):
     doc.save(docx_path)
 
 # ── HÀM CHUYỂN PDF SANG PPTX GIỮ NGUYÊN LAYOUT ĐỊNH DẠNG ────────
-def convert_pdf_to_pptx_editable(pdf_path, password=None):
-    """
-    Chuyển đổi PDF sang PPTX cho phép chỉnh sửa văn bản 
-    nhưng vẫn cố gắng giữ nguyên layout.
-    """
-    # Tải tài liệu PDF
-    document = ap.Document(pdf_path)
+def convert_pdf_to_pptx_open_source(pdf_path):
+    prs = Presentation()
+    blank_layout = prs.slide_layouts[6] # Slide trống
     
-    # Nếu có mật khẩu
-    if password:
-        document.decrypt(password)
+    # Bước 1: Sử dụng pdf2docx để bóc tách cấu trúc văn bản ngầm
+    cv = Converter(pdf_path)
+    # Lấy dữ liệu thô của các trang bao gồm text và tọa độ
+    pages = cv.extract_pages() 
+    cv.close()
+    
+    for page in pages:
+        slide = prs.slides.add_slide(blank_layout)
         
-    # Thiết lập tùy chọn lưu file PPTX
-    save_options = ap.PptxSaveOptions()
-    
-    # Quan trọng: Không lưu slide dưới dạng ảnh để có thể sửa text
-    save_options.slides_as_images = False 
-    
-    # Tạo đường dẫn tạm cho file đầu ra
+        # Đọc các khối văn bản (blocks) từ pdf2docx
+        for block in page.get('blocks', []):
+            if block.get('type') == 0: # Khối văn bản (Text block)
+                lines = block.get('lines', [])
+                for line in lines:
+                    # Lấy tọa độ khối để vẽ khung Textbox tương ứng trên slide
+                    rect = line.get('rect', [0, 0, 0, 0])
+                    # Quy đổi tọa độ PDF sang Inches của PowerPoint
+                    left = Inches(rect[0] / 72)
+                    top = Inches(rect[1] / 72)
+                    width = Inches((rect[2] - rect[0]) / 72)
+                    height = Inches((rect[3] - rect[1]) / 72)
+                    
+                    txBox = slide.shapes.add_textbox(left, top, width, height)
+                    tf = txBox.text_frame
+                    tf.word_wrap = True
+                    
+                    for span in line.get('spans', []):
+                        p = tf.add_paragraph()
+                        p.text = span.get('text', '')
+                        p.font.size = Pt(max(span.get('size', 12), 10))
+                        
     output_pptx = pdf_path.replace(".pdf", ".pptx")
-    
-    # Thực hiện chuyển đổi
-    document.save(output_pptx, save_options)
-    
+    prs.save(output_pptx)
     return output_pptx
 
 
