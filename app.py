@@ -32,7 +32,7 @@ def pdf_has_page_marker(pdf_path, password=None):
         pass
     return False
 
-# ── Gộp nhiều section về 1 ──────────────────────────────────────
+# ── Gộp nhiều section về 1 (Cho Word) ───────────────────────────
 def merge_sections_to_one(doc):
     body = doc.element.body
     removed = 0
@@ -45,7 +45,7 @@ def merge_sections_to_one(doc):
                 removed += 1
     return removed
 
-# ── Xóa dòng trống cuối file ────────────────────────────────────
+# ── Xóa dòng trống cuối file (Cho Word) ─────────────────────────
 def remove_trailing_empty_paragraphs(doc):
     for p in reversed(doc.paragraphs):
         if not p.text.strip():
@@ -53,7 +53,7 @@ def remove_trailing_empty_paragraphs(doc):
         else:
             break
 
-# ── Tạo field PAGE / NUMPAGES ───────────────────────────────────
+# ── Tạo field PAGE / NUMPAGES (Cho Word) ────────────────────────
 def add_complex_field(run, instruction):
     r = run._r
     fc_begin = OxmlElement('w:fldChar')
@@ -77,7 +77,7 @@ def add_complex_field(run, instruction):
     fc_end.set(qn('w:fldCharType'), 'end')
     r.append(fc_end)
 
-# ── Thiết lập footer ────────────────────────────────────────────
+# ── Thiết lập footer (Cho Word) ──────────────────────────────────
 def set_footer(doc):
     for section in doc.sections:
         section.footer.is_linked_to_previous = False
@@ -109,7 +109,7 @@ def set_footer(doc):
             rFonts.set(qn("w:hAnsi"),    "Times New Roman")
             rFonts.set(qn("w:eastAsia"), "Times New Roman")
 
-# ── Xóa toàn bộ footer (dùng khi PDF không có số trang) ─────────
+# ── Xóa toàn bộ footer (Cho Word) ───────────────────────────────
 def clear_all_footers(doc):
     for section in doc.sections:
         section.footer.is_linked_to_previous = False
@@ -117,10 +117,9 @@ def clear_all_footers(doc):
         for para in footer.paragraphs:
             para._element.getparent().remove(para._element)
 
-# ── Pipeline chính xử lý Word ──────────────────────────────────
-def post_process(docx_path, has_marker):
+# ── Hậu xử lý Word ──────────────────────────────────────────────
+def post_process_word(docx_path, has_marker):
     doc = Document(docx_path)
-
     page_pattern = re.compile(r'^Trang\s+\d+(/\d+)?$', re.IGNORECASE)
     to_remove = [p for p in doc.paragraphs if page_pattern.match(p.text.strip())]
     for para in to_remove:
@@ -135,12 +134,11 @@ def post_process(docx_path, has_marker):
         clear_all_footers(doc)
 
     doc.save(docx_path)
-    return len(to_remove)
 
-# ── HÀM CHUYỂN PDF SANG PPTX DÙNG PYMUPDF (SỬA ĐƯỢC CHỮ + GIỮ LAYOUT) ──
+# ── HÀM CHUYỂN PDF SANG PPTX NÂNG CAO: GIỮ BẢNG + TEXT SỬA ĐƯỢC ──
 def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
     prs = Presentation()
-    blank_layout = prs.slide_layouts[6] # Sử dụng slide trống
+    blank_layout = prs.slide_layouts[6] # Slide trống hoàn toàn
     
     doc = fitz.open(pdf_path)
     if password:
@@ -155,13 +153,49 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
         page_width = pdf_page.rect.width
         page_height = pdf_page.rect.height
         
-        # Thiết lập kích thước Slide PowerPoint trùng khớp với trang PDF gốc
+        # Thiết lập kích thước Slide khít với PDF gốc
         prs.slide_width = Inches(page_width / 72)
         prs.slide_height = Inches(page_height / 72)
         
         slide = prs.slides.add_slide(blank_layout)
         
-        # 1. TRÍCH XUẤT HÌNH ẢNH / LOGO VÀ ĐƯA VÀO ĐÚNG TỌA ĐỘ GIỮ LAYOUT
+        # 1. PHÁT HIỆN VÀ DỰNG BẢNG (TABLES) NATIVE TRÊN POWERPOINT
+        tables = pdf_page.find_tables()
+        table_bboxes = []
+        
+        for t in tables:
+            data = t.extract() # Lấy mảng dữ liệu 2 chiều (rows x cols)
+            if not data:
+                continue
+            rows = len(data)
+            cols = len(data[0]) if rows > 0 else 0
+            if rows == 0 or cols == 0:
+                continue
+            
+            # Lưu lại tọa độ của bảng để lát nữa không trích xuất text đè lên vùng này
+            table_bboxes.append(t.bbox)
+            
+            # Quy đổi tọa độ bảng sang PowerPoint
+            left = Inches(t.bbox[0] / 72)
+            top = Inches(t.bbox[1] / 72)
+            width = Inches((t.bbox[2] - t.bbox[0]) / 72)
+            height = Inches((t.bbox[3] - t.bbox[1]) / 72)
+            
+            # Khởi tạo bảng PowerPoint nguyên bản
+            table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
+            pptx_table = table_shape.table
+            
+            # Đổ dữ liệu chữ vào từng Cell trong bảng
+            for r_idx, row_data in enumerate(data):
+                for c_idx, cell_value in enumerate(row_data):
+                    cell = pptx_table.cell(r_idx, c_idx)
+                    cell.text = str(cell_value) if cell_value is not None else ""
+                    # Định dạng font chữ trong bảng
+                    for p in cell.text_frame.paragraphs:
+                        p.font.name = "Times New Roman"
+                        p.font.size = PptxPt(10)
+                        
+        # 2. TRÍCH XUẤT HÌNH ẢNH / LOGO
         image_infos = pdf_page.get_image_info(hashes=False, xrefs=True)
         for img_info in image_infos:
             xref = img_info['xref']
@@ -180,14 +214,29 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
                 except Exception:
                     pass
                     
-        # 2. TRÍCH XUẤT VĂN BẢN THEO ĐỊNH DẠNG DICTIONARY ĐỂ TẠO TEXTBOX SỬA ĐƯỢC CHỮ
+        # 3. TRÍCH XUẤT VĂN BẢN (TỰ ĐỘNG BỎ QUA CÁC TEXT NẰM TRONG BẢNG)
         page_dict = pdf_page.get_text("dict")
         for block in page_dict.get("blocks", []):
             if "lines" in block:
+                block_bbox = block["bbox"]
+                
+                # Tính toán điểm trung tâm của block text để kiểm tra xem nó có nằm lọt vào trong bảng không
+                cx = (block_bbox[0] + block_bbox[2]) / 2
+                cy = (block_bbox[1] + block_bbox[3]) / 2
+                
+                inside_table = False
+                for t_box in table_bboxes:
+                    if t_box[0] <= cx <= t_box[2] and t_box[1] <= cy <= t_box[3]:
+                        inside_table = True
+                        break
+                
+                # Nếu text thuộc về bảng, bỏ qua vì ta đã xử lý ở Bước 1
+                if inside_table:
+                    continue
+                
                 for line in block["lines"]:
                     bbox = line["bbox"]
                     
-                    # Tính toán tọa độ khung văn bản
                     t_left = Inches(bbox[0] / 72)
                     t_top = Inches(bbox[1] / 72)
                     t_width = Inches(max((bbox[2] - bbox[0]), 20) / 72)
@@ -199,7 +248,6 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
                     tf.margin_left = tf.margin_top = tf.margin_right = tf.margin_bottom = 0
                     p = tf.paragraphs[0]
                     
-                    # Gom các mảnh chữ (spans) trên cùng một dòng để tránh bị vỡ hàng dòng
                     for span in line.get("spans", []):
                         run = p.add_run()
                         run.text = span.get("text", "")
@@ -208,7 +256,6 @@ def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
                         
     doc.close()
     
-    # Xuất dữ liệu nhị phân đưa vào Streamlit download button
     pptx_io = io.BytesIO()
     prs.save(pptx_io)
     pptx_io.seek(0)
@@ -283,7 +330,7 @@ if uploaded_file is not None:
                         cv.convert(docx_path, start=start_0, end=end_0)
                         cv.close()
 
-                        post_process(docx_path, has_marker)
+                        post_process_word(docx_path, has_marker)
 
                         with open(docx_path, "rb") as f:
                             docx_bytes = f.read()
@@ -303,24 +350,6 @@ if uploaded_file is not None:
             elif conversion_type == "Chuyển sang PowerPoint (.pptx)":
                 pptx_name = os.path.splitext(uploaded_file.name)[0] + ".pptx"
                 
-                with st.spinner("⏳ Đang bóc tách chữ và giữ nguyên hình ảnh sang PowerPoint..."):
+                with st.spinner("⏳ Đang bóc tách chữ, dựng cấu trúc bảng sang PowerPoint..."):
                     try:
-                        pptx_bytes = convert_pdf_to_pptx(
-                            pdf_path=pdf_path,
-                            start_page=start_page,
-                            end_page=end_page,
-                            password=password if password else None
-                        )
-                        
-                        st.success("✅ Đã chuyển đổi sang PowerPoint thành công!")
-                        st.download_button(
-                            label="⬇️ Tải file PowerPoint về",
-                            data=pptx_bytes,
-                            file_name=pptx_name,
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                            use_container_width=True
-                        )
-                    except Exception as e:
-                        st.error(f"❌ Lỗi khi chuyển đổi sang PowerPoint: {e}")
-else:
-    st.warning("👆 Hãy tải file PDF lên để hệ thống bắt đầu làm việc.")
+                        pptx_bytes = convert_pdf_
