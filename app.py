@@ -32,7 +32,7 @@ def pdf_has_page_marker(pdf_path, password=None):
         pass
     return False
 
-# ── Gộp nhiều section về 1 (Cho Word) ───────────────────────────
+# ── Gộp nhiều section về 1 ──────────────────────────────────────
 def merge_sections_to_one(doc):
     body = doc.element.body
     removed = 0
@@ -45,7 +45,7 @@ def merge_sections_to_one(doc):
                 removed += 1
     return removed
 
-# ── Xóa dòng trống cuối file (Cho Word) ─────────────────────────
+# ── Xóa dòng trống cuối file ────────────────────────────────────
 def remove_trailing_empty_paragraphs(doc):
     for p in reversed(doc.paragraphs):
         if not p.text.strip():
@@ -53,7 +53,7 @@ def remove_trailing_empty_paragraphs(doc):
         else:
             break
 
-# ── Tạo field PAGE / NUMPAGES (Cho Word) ────────────────────────
+# ── Tạo field PAGE / NUMPAGES ───────────────────────────────────
 def add_complex_field(run, instruction):
     r = run._r
     fc_begin = OxmlElement('w:fldChar')
@@ -77,7 +77,7 @@ def add_complex_field(run, instruction):
     fc_end.set(qn('w:fldCharType'), 'end')
     r.append(fc_end)
 
-# ── Thiết lập footer (Cho Word) ──────────────────────────────────
+# ── Thiết lập footer ────────────────────────────────────────────
 def set_footer(doc):
     for section in doc.sections:
         section.footer.is_linked_to_previous = False
@@ -109,7 +109,7 @@ def set_footer(doc):
             rFonts.set(qn("w:hAnsi"),    "Times New Roman")
             rFonts.set(qn("w:eastAsia"), "Times New Roman")
 
-# ── Xóa toàn bộ footer (Cho Word) ───────────────────────────────
+# ── Xóa toàn bộ footer (dùng khi PDF không có số trang) ─────────
 def clear_all_footers(doc):
     for section in doc.sections:
         section.footer.is_linked_to_previous = False
@@ -117,9 +117,10 @@ def clear_all_footers(doc):
         for para in footer.paragraphs:
             para._element.getparent().remove(para._element)
 
-# ── Hậu xử lý Word ──────────────────────────────────────────────
-def post_process_word(docx_path, has_marker):
+# ── Pipeline chính xử lý Word ──────────────────────────────────
+def post_process(docx_path, has_marker):
     doc = Document(docx_path)
+
     page_pattern = re.compile(r'^Trang\s+\d+(/\d+)?$', re.IGNORECASE)
     to_remove = [p for p in doc.paragraphs if page_pattern.match(p.text.strip())]
     for para in to_remove:
@@ -134,88 +135,80 @@ def post_process_word(docx_path, has_marker):
         clear_all_footers(doc)
 
     doc.save(docx_path)
+    return len(to_remove)
 
-# ── HÀM CHUYỂN PDF SANG PPTX (SỬA ĐƯỢC TEXT + GIỮ ẢNH/LAYOUT) ────
+# ── HÀM CHUYỂN PDF SANG PPTX DÙNG PYMUPDF (SỬA ĐƯỢC CHỮ + GIỮ LAYOUT) ──
 def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
     prs = Presentation()
-    blank_layout = prs.slide_layouts[6] # Dùng slide trống hoàn toàn
+    blank_layout = prs.slide_layouts[6] # Sử dụng slide trống
     
-    # Mở tài liệu bằng fitz (PyMuPDF) để lấy thông tin ảnh và kích thước trang chính xác
     doc = fitz.open(pdf_path)
     if password:
         doc.authenticate(password)
         
     total_p = len(doc)
-    
-    # Tính toán khoảng trang thực tế (0-indexed trong python)
     p_start = max(0, start_page - 1) if start_page > 0 else 0
     p_end = min(total_p, end_page) if end_page > 0 else total_p
     
-    # Sử dụng pdf2docx để phân tích layout của văn bản ngầm
-    cv = Converter(pdf_path, password=password)
-    pages_data = cv.extract_pages(start=p_start, end=p_end)
-    cv.close()
-    
-    for idx, page_idx in enumerate(range(p_start, p_end)):
+    for page_idx in range(p_start, p_end):
         pdf_page = doc[page_idx]
         page_width = pdf_page.rect.width
         page_height = pdf_page.rect.height
         
-        # Đồng bộ tỷ lệ kích thước slide PowerPoint vừa khít với trang PDF gốc
+        # Thiết lập kích thước Slide PowerPoint trùng khớp với trang PDF gốc
         prs.slide_width = Inches(page_width / 72)
         prs.slide_height = Inches(page_height / 72)
         
         slide = prs.slides.add_slide(blank_layout)
         
-        # 1. TRÍCH XUẤT VÀ CHÈN HÌNH ẢNH / LOGO (GIỮ LAYOUT)
+        # 1. TRÍCH XUẤT HÌNH ẢNH / LOGO VÀ ĐƯA VÀO ĐÚNG TỌA ĐỘ GIỮ LAYOUT
         image_infos = pdf_page.get_image_info(hashes=False, xrefs=True)
         for img_info in image_infos:
             xref = img_info['xref']
             if xref > 0:
-                base_image = doc.extract_image(xref)
-                image_bytes = base_image["image"]
-                
-                # Tọa độ vùng chứa ảnh trên PDF
-                bbox = img_info['bbox']
-                left = Inches(bbox[0] / 72)
-                top = Inches(bbox[1] / 72)
-                width = Inches((bbox[2] - bbox[0]) / 72)
-                height = Inches((bbox[3] - bbox[1]) / 72)
-                
                 try:
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    bbox = img_info['bbox']
+                    
+                    left = Inches(bbox[0] / 72)
+                    top = Inches(bbox[1] / 72)
+                    width = Inches((bbox[2] - bbox[0]) / 72)
+                    height = Inches((bbox[3] - bbox[1]) / 72)
+                    
                     slide.shapes.add_picture(io.BytesIO(image_bytes), left, top, width, height)
                 except Exception:
-                    pass # Bỏ qua nếu định dạng ảnh nhúng lỗi
+                    pass
                     
-        # 2. TRÍCH XUẤT VÀ VẼ TEXTBOX ĐỂ CHỈNH SỬA VĂN BẢN
-        if idx < len(pages_data):
-            page_layout = pages_data[idx]
-            for block in page_layout.get('blocks', []):
-                if block.get('type') == 0: # Block dạng Văn bản
-                    lines = block.get('lines', [])
-                    for line in lines:
-                        rect = line.get('rect', [0, 0, 0, 0])
+        # 2. TRÍCH XUẤT VĂN BẢN THEO ĐỊNH DẠNG DICTIONARY ĐỂ TẠO TEXTBOX SỬA ĐƯỢC CHỮ
+        page_dict = pdf_page.get_text("dict")
+        for block in page_dict.get("blocks", []):
+            if "lines" in block:
+                for line in block["lines"]:
+                    bbox = line["bbox"]
+                    
+                    # Tính toán tọa độ khung văn bản
+                    t_left = Inches(bbox[0] / 72)
+                    t_top = Inches(bbox[1] / 72)
+                    t_width = Inches(max((bbox[2] - bbox[0]), 20) / 72)
+                    t_height = Inches(max((bbox[3] - bbox[1]), 10) / 72)
+                    
+                    txBox = slide.shapes.add_textbox(t_left, t_top, t_width, t_height)
+                    tf = txBox.text_frame
+                    tf.word_wrap = True
+                    tf.margin_left = tf.margin_top = tf.margin_right = tf.margin_bottom = 0
+                    p = tf.paragraphs[0]
+                    
+                    # Gom các mảnh chữ (spans) trên cùng một dòng để tránh bị vỡ hàng dòng
+                    for span in line.get("spans", []):
+                        run = p.add_run()
+                        run.text = span.get("text", "")
+                        run.font.size = PptxPt(max(span.get("size", 11), 8))
+                        run.font.name = "Times New Roman"
                         
-                        # Chuyển đổi tọa độ box sang PowerPoint
-                        t_left = Inches(rect[0] / 72)
-                        t_top = Inches(rect[1] / 72)
-                        t_width = Inches(max((rect[2] - rect[0]), 20) / 72)
-                        t_height = Inches(max((rect[3] - rect[1]), 10) / 72)
-                        
-                        txBox = slide.shapes.add_textbox(t_left, t_top, t_width, t_height)
-                        tf = txBox.text_frame
-                        tf.word_wrap = True
-                        tf.margin_left = tf.margin_top = tf.margin_right = tf.margin_bottom = 0
-                        
-                        for s_idx, span in enumerate(line.get('spans', [])):
-                            p = tf.paragraphs[0] if s_idx == 0 else tf.add_paragraph()
-                            p.text = span.get('text', '')
-                            p.font.size = PptxPt(max(span.get('size', 11), 8))
-                            p.font.name = "Times New Roman"
-                            
     doc.close()
     
-    # Xuất dữ liệu nhị phân (Bytes) để chuyển trực tiếp sang nút Tải về của Streamlit
+    # Xuất dữ liệu nhị phân đưa vào Streamlit download button
     pptx_io = io.BytesIO()
     prs.save(pptx_io)
     pptx_io.seek(0)
@@ -290,7 +283,7 @@ if uploaded_file is not None:
                         cv.convert(docx_path, start=start_0, end=end_0)
                         cv.close()
 
-                        post_process_word(docx_path, has_marker)
+                        post_process(docx_path, has_marker)
 
                         with open(docx_path, "rb") as f:
                             docx_bytes = f.read()
