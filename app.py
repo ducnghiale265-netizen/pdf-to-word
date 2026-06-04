@@ -10,7 +10,6 @@ from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-import aspose.pdf as ap
 # Thêm thư viện xử lý PPTX
 from pdf2image import convert_from_path
 from pptx import Presentation
