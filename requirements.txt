@@ -1,6 +1,4 @@
 streamlit
 pdf2docx
 pymupdf
-pdf2image
 python-pptx
-aspose.pdf
