@@ -10,7 +10,7 @@ from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-
+import aspose.pdf as ap
 # Thêm thư viện xử lý PPTX
 from pdf2image import convert_from_path
 from pptx import Presentation
@@ -136,51 +136,31 @@ def post_process_word(docx_path, has_marker):
     doc.save(docx_path)
 
 # ── HÀM CHUYỂN PDF SANG PPTX GIỮ NGUYÊN LAYOUT ĐỊNH DẠNG ────────
-def convert_pdf_to_pptx(pdf_path, start_page, end_page, password=None):
+def convert_pdf_to_pptx_editable(pdf_path, password=None):
     """
-    Chuyển đổi từng trang PDF thành hình ảnh chất lượng cao 
-    và chèn vào các slide trống của PowerPoint.
+    Chuyển đổi PDF sang PPTX cho phép chỉnh sửa văn bản 
+    nhưng vẫn cố gắng giữ nguyên layout.
     """
-    # Thiết lập khoảng trang để chuyển đổi ảnh
-    # pdf2image dùng index từ 1
-    first_p = start_page if start_page > 0 else 1
-    last_p = end_page if end_page > 0 else None
+    # Tải tài liệu PDF
+    document = ap.Document(pdf_path)
     
-    # Chuyển PDF sang danh sách ảnh (DPI 150-200 là tối ưu để cân bằng dung lượng và độ nét)
-    images = convert_from_path(
-        pdf_path, 
-        dpi=150, 
-        first_page=first_p, 
-        last_page=last_p, 
-        userpw=password
-    )
+    # Nếu có mật khẩu
+    if password:
+        document.decrypt(password)
+        
+    # Thiết lập tùy chọn lưu file PPTX
+    save_options = ap.PptxSaveOptions()
     
-    prs = Presentation()
+    # Quan trọng: Không lưu slide dưới dạng ảnh để có thể sửa text
+    save_options.slides_as_images = False 
     
-    # Lặp qua từng trang ảnh để đưa vào slide
-    for img in images:
-        # Chọn layout số 6 (Slide trống hoàn toàn - Blank layout)
-        blank_slide_layout = prs.slide_layouts[6]
-        slide = prs.slides.add_slide(blank_slide_layout)
-        
-        # Chuyển đổi ảnh sang dạng bytes trong bộ nhớ để không phải lưu file tạm
-        img_byte_arr = io.BytesIO()
-        img.save(img_byte_arr, format='PNG')
-        img_byte_arr.seek(0)
-        
-        # Chèn ảnh phủ kín toàn bộ bề mặt slide PowerPoint
-        slide.shapes.add_picture(
-            img_byte_arr, 
-            0, 0, 
-            width=prs.slide_width, 
-            height=prs.slide_height
-        )
-        
-    # Lưu file PowerPoint vào luồng dữ liệu bytes
-    pptx_io = io.BytesIO()
-    prs.save(pptx_io)
-    pptx_io.seek(0)
-    return pptx_io.getvalue()
+    # Tạo đường dẫn tạm cho file đầu ra
+    output_pptx = pdf_path.replace(".pdf", ".pptx")
+    
+    # Thực hiện chuyển đổi
+    document.save(output_pptx, save_options)
+    
+    return output_pptx
 
 
 # ── Cấu hình trang Streamlit ────────────────────────────────────
